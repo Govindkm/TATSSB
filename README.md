@@ -12,7 +12,7 @@ Requirements:
 Before running please make sure you install all the requirements.
 
 # How to use
-After installing all the requirements run file 'slideshow.py'
+After installing all the requirements run file 'slideshow.py' or windows users can directly use the 'slideshow.exe' file to run on the machine directly.
 Make sure you have images in the images folder
 
 To change the delay time use variables in the 'slideshow.py' files
