@@ -92,11 +92,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
       - name: Prepare builds branch
         run: |
           set -e
@@ -114,16 +109,21 @@ jobs:
             git commit -m "Initialize builds branch"
           fi
 
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/artifacts
+
       - name: Publish new builds and prune to last 3
         run: |
           set -e
           mkdir -p windows linux
           # Copy artifacts into platform folders
-          if [ -d artifacts/linux ]; then
-            cp artifacts/linux/* linux/ || true
+          if [ -d "${RUNNER_TEMP}/artifacts/linux" ]; then
+            cp "${RUNNER_TEMP}/artifacts/linux"/* linux/ || true
           fi
-          if [ -d artifacts/windows ]; then
-            cp artifacts/windows/* windows/ || true
+          if [ -d "${RUNNER_TEMP}/artifacts/windows" ]; then
+            cp "${RUNNER_TEMP}/artifacts/windows"/* windows/ || true
           fi
           # Keep only the last 3 (by mtime) per platform
           ls -1t linux 2>/dev/null | tail -n +4 | xargs -r -I{} rm -f "linux/{}"
