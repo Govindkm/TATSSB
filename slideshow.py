@@ -148,6 +148,17 @@ class TATSlideshowApp:
         # Storage for answers
         self.answers = {}
         
+    def hide_current_image(self):
+        """Hide the image during writing/display phase."""
+        # Clear any image reference and show a neutral message/background
+        try:
+            self.image_label.config(image="", text="Writing phase in progress\nImage hidden", fg='#7f8c8d')
+            # Remove reference to prevent Tk keeping the old image
+            if hasattr(self.image_label, "image"):
+                self.image_label.image = None
+        except Exception:
+            pass
+
     def load_images(self):
         """Load images from the images folder"""
         image_folder = "images"
@@ -259,6 +270,8 @@ class TATSlideshowApp:
         else:  # writing phase
             self.timer_seconds = self.display_time
             self.phase_label.config(text="Writing Phase", fg='#27ae60')
+            # Ensure image is hidden whenever writing timer starts (covers resume cases)
+            self.hide_current_image()
             
         if self.timer_thread and self.timer_thread.is_alive():
             return
@@ -293,6 +306,8 @@ class TATSlideshowApp:
         if self.current_phase == "preparation":
             # Switch to writing phase
             self.current_phase = "writing"
+            # Hide image as soon as writing/display time starts
+            self.hide_current_image()
             self.start_timer()
         else:
             # Move to next image or finish
