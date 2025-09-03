@@ -18,3 +18,9 @@ dist/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Test/coverage artifacts
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
