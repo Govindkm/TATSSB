@@ -114,8 +114,6 @@ def test_timer_transitions_hide_image_and_next(tmp_path, monkeypatch, tk_root):
 
     try:
         from PIL import Image
-
-        (tmp_path / "images" / "image_1.jpg").write_bytes(b"")
         # create two images
         Image.new("RGB", (10, 10)).save(tmp_path / "images" / "image_1.jpg")
         Image.new("RGB", (10, 10)).save(tmp_path / "images" / "image_2.jpg")
