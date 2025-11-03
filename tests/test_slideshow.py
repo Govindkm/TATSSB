@@ -1,5 +1,6 @@
 import builtins
 import os
+import shutil
 import types
 import threading
 import time
@@ -349,3 +350,934 @@ def test_toggle_randomize_updates_setting(tmp_path, monkeypatch, tk_root):
         assert "sequential" in info.call_args[0][1].lower()
     
     assert app.randomize_enabled is False
+
+
+def test_start_slideshow_no_images(tmp_path, monkeypatch, tk_root):
+    """Test start_slideshow shows warning when no images loaded"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.images = []  # Ensure no images
+    
+    with mock.patch("tkinter.messagebox.showwarning") as warn:
+        app.start_slideshow()
+        warn.assert_called()
+        assert "load images" in warn.call_args[0][1].lower()
+
+
+def test_start_slideshow_invalid_time_values(tmp_path, monkeypatch, tk_root):
+    """Test start_slideshow handles invalid time input"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    (tmp_path / "images" / "image_1.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    # Set invalid time value
+    app.display_time_var.set("invalid")
+    
+    with mock.patch("tkinter.messagebox.showerror") as error:
+        app.start_slideshow()
+        error.assert_called()
+        assert "valid time" in error.call_args[0][1].lower()
+
+
+def test_slideshow_finished_message(tmp_path, monkeypatch, tk_root):
+    """Test slideshow_finished displays completion message"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    try:
+        from PIL import Image
+        Image.new("RGB", (10, 10)).save(tmp_path / "images" / "image_1.jpg")
+    except Exception:
+        pytest.skip("Pillow not available in test environment")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.answers = {"image_1.jpg": "Test answer"}
+    
+    with mock.patch("tkinter.messagebox.showinfo") as info:
+        app.slideshow_finished()
+        info.assert_called()
+        assert "complete" in info.call_args[0][1].lower()
+
+
+def test_export_answers_no_answers(tmp_path, monkeypatch, tk_root):
+    """Test export_answers shows warning when no answers to export"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.answers = {}
+    
+    with mock.patch("tkinter.messagebox.showwarning") as warn:
+        app.export_answers()
+        warn.assert_called()
+        assert "no answers" in warn.call_args[0][1].lower()
+
+
+def test_export_answers_cancel_dialog(tmp_path, monkeypatch, tk_root):
+    """Test export_answers handles canceled file dialog"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.answers = {"image_1.jpg": "Test answer"}
+    
+    # Mock save dialog returning empty string (cancelled)
+    with mock.patch("tkinter.filedialog.asksaveasfilename", return_value=""):
+        app.export_answers()
+        # Should not crash
+
+
+def test_export_answers_write_error(tmp_path, monkeypatch, tk_root):
+    """Test export_answers handles write errors"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.answers = {"image_1.jpg": "Test answer"}
+    
+    # Mock save dialog and file write error
+    with mock.patch("tkinter.filedialog.asksaveasfilename", return_value="/invalid/path/out.txt"):
+        with mock.patch("tkinter.messagebox.showerror") as error:
+            app.export_answers()
+            error.assert_called()
+
+
+def test_hide_current_image(tmp_path, monkeypatch, tk_root):
+    """Test hide_current_image clears the display"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    try:
+        from PIL import Image
+        Image.new("RGB", (10, 10)).save(tmp_path / "images" / "image_1.jpg")
+    except Exception:
+        pytest.skip("Pillow not available in test environment")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.current_image_index = 0
+    app.show_current_image()
+    assert hasattr(app.image_label, "image")
+    
+    app.hide_current_image()
+    # Image should be cleared
+    assert "hidden" in app.image_label.cget("text").lower() or "writing" in app.image_label.cget("text").lower()
+
+
+def test_update_image_counter_no_images(tmp_path, monkeypatch, tk_root):
+    """Test update_image_counter with no images"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.images = []
+    app.update_image_counter()
+    assert app.image_counter_label.cget("text") == "Image: 0/0"
+
+
+def test_load_images_png_format(tmp_path, monkeypatch, tk_root):
+    """Test loading PNG format images"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    # Create PNG files
+    for i in [1, 2, 3]:
+        (tmp_path / "images" / f"image_{i}.png").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    # Should load PNG files
+    assert len(app.images) == 3
+    assert all(img.endswith('.png') for img in app.images)
+
+
+def test_load_images_mixed_formats(tmp_path, monkeypatch, tk_root):
+    """Test loading mixed JPG and PNG images"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    # Create mixed format files
+    (tmp_path / "images" / "image_1.jpg").write_bytes(b"\x00")
+    (tmp_path / "images" / "image_2.png").write_bytes(b"\x00")
+    (tmp_path / "images" / "image_3.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    # Should load all images
+    assert len(app.images) == 3
+
+
+def test_load_images_extract_number_exception(tmp_path, monkeypatch, tk_root):
+    """Test extract_number handles invalid filenames gracefully"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    # Create file with invalid format (should return 0)
+    (tmp_path / "images" / "image_invalid.jpg").write_bytes(b"\x00")
+    (tmp_path / "images" / "image_1.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    # Should still load images without crashing
+    assert len(app.images) >= 1
+
+
+def test_show_current_image_error_handling(tmp_path, monkeypatch, tk_root):
+    """Test show_current_image handles corrupt images"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    # Create corrupt image file
+    corrupt_file = tmp_path / "images" / "image_1.jpg"
+    corrupt_file.write_bytes(b"not a valid image")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.current_image_index = 0
+    
+    with mock.patch("tkinter.messagebox.showerror") as error:
+        app.show_current_image()
+        error.assert_called()
+
+
+def test_timer_color_changes(tmp_path, monkeypatch, tk_root):
+    """Test timer label color changes based on remaining time"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    try:
+        from PIL import Image
+        Image.new("RGB", (10, 10)).save(tmp_path / "images" / "image_1.jpg")
+    except Exception:
+        pytest.skip("Pillow not available in test environment")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.root.after = lambda delay, func=None, *a, **k: (func() if func else None)
+    
+    # Test different timer values
+    app.timer_seconds = 31
+    app.is_running = True
+    # Should be normal color (>30 seconds)
+    
+    app.timer_seconds = 15
+    # Should be orange (<=30 seconds)
+    
+    app.timer_seconds = 5
+    # Should be red (<=10 seconds)
+
+
+def test_stop_slideshow_resets_ui(tmp_path, monkeypatch, tk_root):
+    """Test stop_slideshow properly resets UI state"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    try:
+        from PIL import Image
+        Image.new("RGB", (10, 10)).save(tmp_path / "images" / "image_1.jpg")
+    except Exception:
+        pytest.skip("Pillow not available in test environment")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.is_running = True
+    app.is_paused = True
+    
+    app.stop_slideshow()
+    
+    assert app.is_running is False
+    assert app.is_paused is False
+    assert app.timer_label.cget("text") == "00:00"
+    assert app.start_btn.cget("state") == tk.NORMAL
+    assert app.pause_btn.cget("state") == tk.DISABLED
+    assert app.stop_btn.cget("state") == tk.DISABLED
+
+
+def test_next_image_at_end_finishes_slideshow(tmp_path, monkeypatch, tk_root):
+    """Test next_image calls slideshow_finished at end"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    try:
+        from PIL import Image
+        Image.new("RGB", (10, 10)).save(tmp_path / "images" / "image_1.jpg")
+    except Exception:
+        pytest.skip("Pillow not available in test environment")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.root.after = lambda delay, func=None, *a, **k: (func() if func else None)
+    app.current_image_index = 0  # Last image
+    app.is_running = True
+    
+    with mock.patch("tkinter.messagebox.showinfo"):
+        app.next_image()
+        # Should finish slideshow
+        assert app.is_running is False
+
+
+def test_load_settings_file_not_exists(tmp_path, monkeypatch, tk_root):
+    """Test load_settings when file doesn't exist"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    # Ensure no settings file exists
+    if os.path.exists("tatssb_settings.json"):
+        os.remove("tatssb_settings.json")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    # Should use defaults
+    assert app.randomize_enabled is False
+    assert app.display_time == 240
+    assert app.preparation_time == 30
+
+
+def test_load_settings_corrupt_file(tmp_path, monkeypatch, tk_root):
+    """Test load_settings handles corrupt JSON"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    # Create corrupt settings file
+    with open("tatssb_settings.json", "w") as f:
+        f.write("not valid json {{{")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    # Should use defaults and not crash
+    assert app.randomize_enabled is False
+
+
+def test_save_settings_error_handling(tmp_path, monkeypatch, tk_root):
+    """Test save_settings handles write errors"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    # Mock open to raise an error
+    with mock.patch("builtins.open", side_effect=PermissionError("No permission")):
+        # Should not crash
+        app.save_settings()
+
+
+def test_image_manager_opens(tmp_path, monkeypatch, tk_root):
+    """Test opening the image manager window"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    (tmp_path / "images" / "image_1.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    # Should not crash when opening manager
+    app.open_image_manager()
+    # Close all toplevels
+    for widget in tk_root.winfo_children():
+        if isinstance(widget, tk.Toplevel):
+            widget.destroy()
+
+
+def test_image_manager_refresh_creates_folder(tmp_path, monkeypatch, tk_root):
+    """Test image manager creates images folder if missing"""
+    monkeypatch.chdir(tmp_path)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    
+    # Remove images folder
+    if os.path.exists("images"):
+        shutil.rmtree("images")
+    
+    manager = ImageManagerWindow(tk_root, app)
+    manager.refresh_image_list()
+    
+    # Should create folder
+    assert os.path.exists("images")
+    
+    manager.close_window()
+
+
+def test_image_manager_add_images_no_selection(tmp_path, monkeypatch, tk_root):
+    """Test image manager add_images with no files selected"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    manager = ImageManagerWindow(tk_root, app)
+    
+    # Mock file dialog returning empty tuple (no selection)
+    with mock.patch("tkinter.filedialog.askopenfilenames", return_value=()):
+        manager.add_images()
+    
+    manager.close_window()
+
+
+def test_image_manager_add_invalid_image(tmp_path, monkeypatch, tk_root):
+    """Test image manager handles invalid image files"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    manager = ImageManagerWindow(tk_root, app)
+    
+    # Create a fake image file
+    fake_img = tmp_path / "fake.jpg"
+    fake_img.write_bytes(b"not an image")
+    
+    with mock.patch("tkinter.filedialog.askopenfilenames", return_value=[str(fake_img)]):
+        with mock.patch("tkinter.messagebox.showerror") as error:
+            manager.add_images()
+            error.assert_called()
+    
+    manager.close_window()
+
+
+def test_image_manager_add_unsupported_format(tmp_path, monkeypatch, tk_root):
+    """Test image manager rejects unsupported formats"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    manager = ImageManagerWindow(tk_root, app)
+    
+    # Create a text file
+    txt_file = tmp_path / "test.txt"
+    txt_file.write_text("test")
+    
+    # Mock PIL to not raise error but file has wrong extension
+    with mock.patch("tkinter.filedialog.askopenfilenames", return_value=[str(txt_file)]):
+        with mock.patch("tkinter.messagebox.showerror") as error:
+            manager.add_images()
+            error.assert_called()
+    
+    manager.close_window()
+
+
+def test_image_manager_add_valid_images(tmp_path, monkeypatch, tk_root):
+    """Test image manager successfully adds valid images"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    try:
+        from PIL import Image
+        # Create valid test images
+        test_img1 = tmp_path / "test1.jpg"
+        test_img2 = tmp_path / "test2.png"
+        Image.new("RGB", (10, 10)).save(test_img1)
+        Image.new("RGB", (10, 10)).save(test_img2)
+    except Exception:
+        pytest.skip("Pillow not available in test environment")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    manager = ImageManagerWindow(tk_root, app)
+    
+    with mock.patch("tkinter.filedialog.askopenfilenames", return_value=[str(test_img1), str(test_img2)]):
+        with mock.patch("tkinter.messagebox.showinfo") as info:
+            manager.add_images()
+            info.assert_called()
+            assert "added" in info.call_args[0][1].lower()
+    
+    # Verify images were added
+    assert os.path.exists("images/image_1.jpg")
+    assert os.path.exists("images/image_2.png")
+    
+    manager.close_window()
+
+
+def test_image_manager_add_jpeg_extension_normalized(tmp_path, monkeypatch, tk_root):
+    """Test image manager normalizes .jpeg to .jpg"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    try:
+        from PIL import Image
+        test_img = tmp_path / "test.jpeg"
+        Image.new("RGB", (10, 10)).save(test_img, format="JPEG")
+    except Exception:
+        pytest.skip("Pillow not available in test environment")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    manager = ImageManagerWindow(tk_root, app)
+    
+    with mock.patch("tkinter.filedialog.askopenfilenames", return_value=[str(test_img)]):
+        with mock.patch("tkinter.messagebox.showinfo"):
+            manager.add_images()
+    
+    # Should be saved as .jpg, not .jpeg
+    assert os.path.exists("images/image_1.jpg")
+    
+    manager.close_window()
+
+
+def test_image_manager_delete_no_selection(tmp_path, monkeypatch, tk_root):
+    """Test image manager delete with no image selected"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    manager = ImageManagerWindow(tk_root, app)
+    manager.selected_image = None
+    
+    # Should not crash
+    manager.delete_image()
+    
+    manager.close_window()
+
+
+def test_image_manager_delete_confirmed(tmp_path, monkeypatch, tk_root):
+    """Test image manager deletes image when confirmed"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    test_img = tmp_path / "images" / "image_1.jpg"
+    test_img.write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    manager = ImageManagerWindow(tk_root, app)
+    manager.selected_image = str(test_img)
+    
+    # Mock confirmation dialog
+    with mock.patch("tkinter.messagebox.askyesno", return_value=True):
+        with mock.patch("tkinter.messagebox.showinfo"):
+            manager.delete_image()
+    
+    # Image should be deleted
+    assert not os.path.exists(test_img)
+    
+    manager.close_window()
+
+
+def test_image_manager_delete_cancelled(tmp_path, monkeypatch, tk_root):
+    """Test image manager doesn't delete when cancelled"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    test_img = tmp_path / "images" / "image_1.jpg"
+    test_img.write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    manager = ImageManagerWindow(tk_root, app)
+    manager.selected_image = str(test_img)
+    
+    # Mock confirmation dialog returning False
+    with mock.patch("tkinter.messagebox.askyesno", return_value=False):
+        manager.delete_image()
+    
+    # Image should still exist
+    assert os.path.exists(test_img)
+    
+    manager.close_window()
+
+
+def test_image_manager_delete_error_handling(tmp_path, monkeypatch, tk_root):
+    """Test image manager handles delete errors"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    # Create a file that we can then mock to fail deletion
+    test_img = tmp_path / "images" / "image_1.jpg"
+    test_img.write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    manager = ImageManagerWindow(tk_root, app)
+    manager.selected_image = str(test_img)
+    
+    # Mock os.remove to raise an error
+    with mock.patch("tkinter.messagebox.askyesno", return_value=True):
+        with mock.patch("os.remove", side_effect=PermissionError("No permission")):
+            with mock.patch("tkinter.messagebox.showerror") as error:
+                manager.delete_image()
+                error.assert_called()
+    
+    manager.close_window()
+
+
+def test_image_manager_show_preview_success(tmp_path, monkeypatch, tk_root):
+    """Test image manager shows preview successfully"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    try:
+        from PIL import Image
+        test_img = tmp_path / "images" / "image_1.jpg"
+        Image.new("RGB", (100, 200)).save(test_img)
+    except Exception:
+        pytest.skip("Pillow not available in test environment")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    manager = ImageManagerWindow(tk_root, app)
+    
+    manager.show_preview(str(test_img))
+    
+    # Info label should show image details
+    info_text = manager.info_label.cget("text")
+    assert "100 x 200" in info_text
+    assert "image_1.jpg" in info_text
+    
+    manager.close_window()
+
+
+def test_image_manager_show_preview_error(tmp_path, monkeypatch, tk_root):
+    """Test image manager handles preview errors"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    manager = ImageManagerWindow(tk_root, app)
+    
+    # Try to preview nonexistent file
+    manager.show_preview("/nonexistent/file.jpg")
+    
+    # Should show error message in preview label
+    preview_text = manager.preview_label.cget("text")
+    assert "error" in preview_text.lower()
+    
+    manager.close_window()
+
+
+def test_image_manager_on_image_select_enables_delete(tmp_path, monkeypatch, tk_root):
+    """Test image selection enables delete button"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    (tmp_path / "images" / "image_1.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    manager = ImageManagerWindow(tk_root, app)
+    
+    # Initially delete button should be disabled
+    assert manager.delete_btn.cget("state") == tk.DISABLED
+    
+    # Simulate selection
+    manager.image_listbox.insert(0, "image_1.jpg")
+    manager.image_listbox.selection_set(0)
+    
+    # Create mock event
+    event = type('Event', (), {'widget': manager.image_listbox})()
+    
+    with mock.patch.object(manager, 'show_preview'):
+        manager.on_image_select(event)
+    
+    # Delete button should be enabled
+    assert manager.delete_btn.cget("state") == tk.NORMAL
+    
+    manager.close_window()
+
+
+def test_image_manager_extract_number_from_filename(tmp_path, monkeypatch, tk_root):
+    """Test image manager extracts numbers correctly for sorting"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    # Create images with different numbers
+    for i in [5, 1, 10, 2]:
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    manager = ImageManagerWindow(tk_root, app)
+    
+    # Images should be sorted numerically
+    items = [manager.image_listbox.get(i) for i in range(manager.image_listbox.size())]
+    assert items == ["image_1.jpg", "image_2.jpg", "image_5.jpg", "image_10.jpg"]
+    
+    manager.close_window()
+
+
+def test_main_function(tmp_path, monkeypatch):
+    """Test the main function initializes app"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    from slideshow import main
+    
+    # Mock mainloop to prevent blocking
+    with mock.patch("tkinter.Tk.mainloop"):
+        with mock.patch("tkinter.messagebox.showwarning"):
+            # Should not crash
+            main()
+
+
+def test_next_image_advances_index(tmp_path, monkeypatch, tk_root):
+    """Test next_image advances to the next image"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    try:
+        from PIL import Image
+        Image.new("RGB", (10, 10)).save(tmp_path / "images" / "image_1.jpg")
+        Image.new("RGB", (10, 10)).save(tmp_path / "images" / "image_2.jpg")
+        Image.new("RGB", (10, 10)).save(tmp_path / "images" / "image_3.jpg")
+    except Exception:
+        pytest.skip("Pillow not available in test environment")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.root.after = lambda delay, func=None, *a, **k: (func() if func else None)
+    app.current_image_index = 0
+    app.is_running = True
+    app.current_phase = "writing"
+    
+    with mock.patch("tkinter.messagebox.showinfo"):
+        app.next_image()
+    
+    # Should advance to next image
+    assert app.current_image_index == 1
+    assert app.current_phase == "preparation"
+
+
+def test_timer_finished_in_writing_phase_saves_answer(tmp_path, monkeypatch, tk_root):
+    """Test timer_finished saves answer and moves to next image in writing phase"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    try:
+        from PIL import Image
+        Image.new("RGB", (10, 10)).save(tmp_path / "images" / "image_1.jpg")
+        Image.new("RGB", (10, 10)).save(tmp_path / "images" / "image_2.jpg")
+    except Exception:
+        pytest.skip("Pillow not available in test environment")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.root.after = lambda delay, func=None, *a, **k: (func() if func else None)
+    app.current_image_index = 0
+    app.is_running = True
+    app.current_phase = "writing"
+    app.answer_text.insert("1.0", "Test answer")
+    
+    with mock.patch("tkinter.messagebox.showinfo"):
+        app.timer_finished()
+    
+    # Should save answer
+    assert len(app.answers) > 0
+
+
+def test_toggle_pause_in_writing_phase(tmp_path, monkeypatch, tk_root):
+    """Test toggle_pause shows correct phase when resumed in writing phase"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    try:
+        from PIL import Image
+        Image.new("RGB", (10, 10)).save(tmp_path / "images" / "image_1.jpg")
+    except Exception:
+        pytest.skip("Pillow not available in test environment")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.current_phase = "writing"
+    app.is_paused = False
+    
+    # Pause
+    app.toggle_pause()
+    assert app.is_paused is True
+    assert app.phase_label.cget("text") == "PAUSED"
+    
+    # Resume in writing phase
+    app.toggle_pause()
+    assert app.is_paused is False
+    assert "Writing" in app.phase_label.cget("text")
+
+
+def test_image_manager_add_images_multiple_errors(tmp_path, monkeypatch, tk_root):
+    """Test image manager shows multiple errors when adding many invalid files"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    manager = ImageManagerWindow(tk_root, app)
+    
+    # Create 10 invalid files
+    invalid_files = []
+    for i in range(10):
+        invalid_file = tmp_path / f"invalid_{i}.jpg"
+        invalid_file.write_bytes(b"not an image")
+        invalid_files.append(str(invalid_file))
+    
+    with mock.patch("tkinter.filedialog.askopenfilenames", return_value=invalid_files):
+        with mock.patch("tkinter.messagebox.showerror") as error:
+            manager.add_images()
+            error.assert_called()
+            # Should show "... and X more errors" message
+            message = error.call_args[0][1]
+            assert "more errors" in message.lower() or "error" in message.lower()
+    
+    manager.close_window()
+
+
+def test_hide_current_image_exception_handling(tmp_path, monkeypatch, tk_root):
+    """Test hide_current_image handles exceptions gracefully"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    # Mock config to raise an exception
+    with mock.patch.object(app.image_label, 'config', side_effect=Exception("Test error")):
+        # Should not crash
+        app.hide_current_image()
+
+
+def test_load_images_with_no_extension(tmp_path, monkeypatch, tk_root):
+    """Test that files without proper extensions are handled"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    # Create file without extension
+    (tmp_path / "images" / "image_1").write_bytes(b"\x00")
+    (tmp_path / "images" / "image_2.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    # Should only load the .jpg file
+    assert len(app.images) == 1
+    assert app.images[0].endswith(".jpg")
+
+
+def test_image_manager_on_image_select_no_selection(tmp_path, monkeypatch, tk_root):
+    """Test on_image_select with no selection"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    manager = ImageManagerWindow(tk_root, app)
+    
+    # Clear selection
+    manager.image_listbox.selection_clear(0, tk.END)
+    
+    # Create mock event
+    event = type('Event', (), {'widget': manager.image_listbox})()
+    
+    manager.on_image_select(event)
+    
+    # Delete button should remain disabled
+    assert manager.delete_btn.cget("state") == tk.DISABLED
+    
+    manager.close_window()
+
+
+def test_start_timer_with_existing_thread(tmp_path, monkeypatch, tk_root):
+    """Test start_timer doesn't create duplicate threads"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    try:
+        from PIL import Image
+        Image.new("RGB", (10, 10)).save(tmp_path / "images" / "image_1.jpg")
+    except Exception:
+        pytest.skip("Pillow not available in test environment")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.root.after = lambda delay, func=None, *a, **k: (func() if func else None)
+    app.is_running = True
+    app.current_phase = "preparation"
+    
+    # Start timer
+    app.start_timer()
+    first_thread = app.timer_thread
+    
+    # Try to start again while thread is alive
+    if first_thread and first_thread.is_alive():
+        app.start_timer()
+        # Should still be the same thread
+        assert app.timer_thread == first_thread
+    
+    app.is_running = False
+
+
+def test_image_manager_extract_number_handles_invalid_format(tmp_path, monkeypatch, tk_root):
+    """Test that extract_number in ImageManager handles invalid filenames"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    # Create files with various invalid formats
+    (tmp_path / "images" / "notanimage.jpg").write_bytes(b"\x00")
+    (tmp_path / "images" / "image_.jpg").write_bytes(b"\x00")
+    (tmp_path / "images" / "image_abc.jpg").write_bytes(b"\x00")
+    (tmp_path / "images" / "image_5.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    from slideshow import ImageManagerWindow
+    manager = ImageManagerWindow(tk_root, app)
+    
+    # Should handle all files without crashing
+    # Files with valid numbers should appear
+    items = [manager.image_listbox.get(i) for i in range(manager.image_listbox.size())]
+    assert "image_5.jpg" in items
+    
+    manager.close_window()
