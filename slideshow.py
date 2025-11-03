@@ -28,10 +28,17 @@ class TATSlideshowApp:
         self.timer_thread = None
         self.current_phase = "preparation"  # "preparation" or "writing"
         self.randomize_enabled = False  # Randomization toggle
+        self.num_images_to_practice = None  # Number of images to practice (None = all)
+        self.total_available_images = 0  # Total images available in folder
         self.settings_file = "tatssb_settings.json"
         
         self.load_settings()
         self.setup_ui()
+        
+        # Update UI with loaded settings after UI is created
+        if self.num_images_to_practice:
+            self.num_images_var.set(str(self.num_images_to_practice))
+        
         self.load_images()
         
     def setup_ui(self):
@@ -109,6 +116,22 @@ class TATSlideshowApp:
                                         font=('Arial', 10), command=self.toggle_randomize)
         randomize_check.pack(pady=(5, 0))
         
+        # Number of images to practice
+        tk.Label(settings_frame, text="Number of Images:", bg='#e8e8e8', font=('Arial', 10)).pack(pady=(5, 0))
+        num_images_frame = tk.Frame(settings_frame, bg='#e8e8e8')
+        num_images_frame.pack()
+        self.num_images_var = tk.StringVar(value="")
+        self.num_images_entry = tk.Entry(num_images_frame, textvariable=self.num_images_var, width=5)
+        self.num_images_entry.pack(side=tk.LEFT)
+        self.max_images_label = tk.Label(num_images_frame, text="(Max: 0)", bg='#e8e8e8', 
+                                         font=('Arial', 9), fg='#7f8c8d')
+        self.max_images_label.pack(side=tk.LEFT, padx=(3, 0))
+        
+        # Tooltip label
+        tooltip_label = tk.Label(settings_frame, text="Leave empty for all images", 
+                               bg='#e8e8e8', font=('Arial', 8), fg='#95a5a6')
+        tooltip_label.pack()
+        
         # Content area
         content_frame = tk.Frame(main_frame, bg='#f0f0f0')
         content_frame.pack(fill=tk.BOTH, expand=True)
@@ -184,6 +207,8 @@ class TATSlideshowApp:
         if not os.path.exists(image_folder):
             os.makedirs(image_folder)
             messagebox.showwarning("No Images", "Images folder created. Please add images in format: image_1.jpg, image_2.jpg, etc.")
+            self.total_available_images = 0
+            self.max_images_label.config(text="(Max: 0)")
             return
             
         # Load images in numerical order
@@ -192,6 +217,8 @@ class TATSlideshowApp:
         
         if not image_files:
             messagebox.showwarning("No Images", "No images found. Please add images in format: image_1.jpg, image_2.jpg, etc.")
+            self.total_available_images = 0
+            self.max_images_label.config(text="(Max: 0)")
             return
             
         # Sort by number in filename
@@ -203,25 +230,75 @@ class TATSlideshowApp:
                 
         image_files.sort(key=extract_number)
         self.original_images = image_files.copy()  # Keep original order
+        self.total_available_images = len(image_files)
         
-        # Apply randomization if enabled
-        if self.randomize_enabled:
-            self.images = image_files.copy()
-            random.shuffle(self.images)
+        # Update max images label
+        self.max_images_label.config(text=f"(Max: {self.total_available_images})")
+        
+        # Determine how many images to use
+        num_to_use = self.num_images_to_practice if self.num_images_to_practice else self.total_available_images
+        
+        # Select images based on configuration
+        if num_to_use < self.total_available_images:
+            # Apply randomization if enabled
+            if self.randomize_enabled:
+                selected_images = random.sample(image_files, num_to_use)
+            else:
+                selected_images = image_files[:num_to_use]
+            self.images = selected_images
         else:
-            self.images = image_files
+            # Use all images
+            if self.randomize_enabled:
+                self.images = image_files.copy()
+                random.shuffle(self.images)
+            else:
+                self.images = image_files
             
         self.update_image_counter()
         
         if self.images:
             randomize_status = " (Randomized)" if self.randomize_enabled else ""
             self.image_label.config(text=f"Loaded {len(self.images)} images{randomize_status}\nReady to start TAT practice")
+    
+    def validate_num_images_input(self):
+        """
+        Validate the number of images input.
+        Returns (is_valid, num_images_or_error_msg)
+        If is_valid is True, second value is the validated number (or None for all images)
+        If is_valid is False, second value is the error message
+        """
+        input_value = self.num_images_var.get().strip()
+        
+        # Empty input means use all images
+        if not input_value:
+            return True, None
+        
+        # Check if input is numeric
+        try:
+            num_images = int(input_value)
+        except ValueError:
+            return False, "Please enter a valid number."
+        
+        # Check for zero or negative values
+        if num_images <= 0:
+            return False, f"Please enter a value between 1 and {self.total_available_images}."
+        
+        # Check if exceeds available images
+        if num_images > self.total_available_images:
+            return False, f"Cannot select {num_images} images. Only {self.total_available_images} images available."
+        
+        return True, num_images
             
     def update_image_counter(self):
         """Update the image counter display"""
         total = len(self.images)
         current = self.current_image_index + 1 if self.images else 0
-        self.image_counter_label.config(text=f"Image: {current}/{total}")
+        
+        # Show different format if images are limited vs all images
+        if self.num_images_to_practice and self.num_images_to_practice < self.total_available_images:
+            self.image_counter_label.config(text=f"Image: {current}/{total} (of {self.total_available_images} total)")
+        else:
+            self.image_counter_label.config(text=f"Image: {current}/{total}")
         
     def start_slideshow(self):
         """Start the slideshow"""
@@ -235,6 +312,29 @@ class TATSlideshowApp:
         except ValueError:
             messagebox.showerror("Invalid Time", "Please enter valid time values!")
             return
+        
+        # Validate num_images_to_practice input
+        is_valid, result = self.validate_num_images_input()
+        if not is_valid:
+            messagebox.showerror("Invalid Image Count", result)
+            return
+        
+        # Update num_images_to_practice and reload images if changed
+        new_num_images = result
+        if new_num_images != self.num_images_to_practice:
+            self.num_images_to_practice = new_num_images
+            self.save_settings()
+            self.load_images()  # Reload with new configuration
+        
+        # Show confirmation message
+        randomize_text = " (randomized)" if self.randomize_enabled else ""
+        if self.num_images_to_practice:
+            confirmation = f"Starting test with {len(self.images)} images{randomize_text}"
+        else:
+            confirmation = f"Starting test with all {len(self.images)} images{randomize_text}"
+        self.phase_label.config(text=confirmation)
+        self.root.update()
+        time.sleep(0.5)  # Brief pause to show confirmation
             
         self.is_running = True
         self.is_paused = False
@@ -355,7 +455,18 @@ class TATSlideshowApp:
     def slideshow_finished(self):
         """Handle slideshow completion"""
         self.stop_slideshow()
-        messagebox.showinfo("Complete", f"TAT practice session completed!\nAnswered {len(self.answers)} images.")
+        
+        # Show completion message with proper context
+        if self.num_images_to_practice and self.num_images_to_practice < self.total_available_images:
+            completion_msg = f"TAT practice session completed!\n\n"
+            completion_msg += f"Completed {len(self.images)} of {self.total_available_images} available images.\n"
+            completion_msg += f"Answered {len(self.answers)} images."
+        else:
+            completion_msg = f"TAT practice session completed!\n\n"
+            completion_msg += f"Completed all {len(self.images)} images.\n"
+            completion_msg += f"Answered {len(self.answers)} images."
+        
+        messagebox.showinfo("Complete", completion_msg)
         
     def toggle_pause(self):
         """Pause or resume the slideshow"""
@@ -432,6 +543,7 @@ class TATSlideshowApp:
                     self.randomize_enabled = settings.get('randomize_enabled', False)
                     self.display_time = settings.get('display_time', 240)
                     self.preparation_time = settings.get('preparation_time', 30)
+                    self.num_images_to_practice = settings.get('num_images_to_practice', None)
             except Exception as e:
                 print(f"Error loading settings: {e}")
     
@@ -441,7 +553,8 @@ class TATSlideshowApp:
             settings = {
                 'randomize_enabled': self.randomize_enabled,
                 'display_time': self.display_time,
-                'preparation_time': self.preparation_time
+                'preparation_time': self.preparation_time,
+                'num_images_to_practice': self.num_images_to_practice
             }
             with open(self.settings_file, 'w') as f:
                 json.dump(settings, f, indent=2)

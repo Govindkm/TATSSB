@@ -1,4 +1,5 @@
 import builtins
+import json
 import os
 import shutil
 import types
@@ -1281,3 +1282,411 @@ def test_image_manager_extract_number_handles_invalid_format(tmp_path, monkeypat
     assert "image_5.jpg" in items
     
     manager.close_window()
+
+
+# ============================================================================
+# Tests for Configurable Image Selection Feature (PBI 3006234)
+# ============================================================================
+
+def test_num_images_to_practice_variable_initialized(tmp_path, monkeypatch, tk_root):
+    """Test that num_images_to_practice is initialized properly"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    assert hasattr(app, 'num_images_to_practice')
+    assert hasattr(app, 'total_available_images')
+    assert app.total_available_images == 0
+    assert app.num_images_to_practice is None
+
+
+def test_num_images_ui_elements_exist(tmp_path, monkeypatch, tk_root):
+    """Test that UI elements for configurable image count are present"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    assert hasattr(app, 'num_images_var')
+    assert hasattr(app, 'num_images_entry')
+    assert hasattr(app, 'max_images_label')
+    assert app.max_images_label.cget("text") == "(Max: 0)"
+
+
+def test_validate_num_images_empty_input_returns_none(tmp_path, monkeypatch, tk_root):
+    """Test validation with empty input returns None (use all images)"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    (tmp_path / "images" / "image_1.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.num_images_var.set("")
+    is_valid, result = app.validate_num_images_input()
+    assert is_valid is True
+    assert result is None
+
+
+def test_validate_num_images_valid_input(tmp_path, monkeypatch, tk_root):
+    """Test validation with valid numeric input"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 11):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.num_images_var.set("5")
+    is_valid, result = app.validate_num_images_input()
+    assert is_valid is True
+    assert result == 5
+
+
+def test_validate_num_images_non_numeric_input(tmp_path, monkeypatch, tk_root):
+    """Test validation rejects non-numeric input"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    (tmp_path / "images" / "image_1.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.num_images_var.set("abc")
+    is_valid, result = app.validate_num_images_input()
+    assert is_valid is False
+    assert "valid number" in result.lower()
+
+
+def test_validate_num_images_zero_rejected(tmp_path, monkeypatch, tk_root):
+    """Test validation rejects zero"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 6):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.num_images_var.set("0")
+    is_valid, result = app.validate_num_images_input()
+    assert is_valid is False
+    assert "between 1 and" in result.lower()
+
+
+def test_validate_num_images_negative_rejected(tmp_path, monkeypatch, tk_root):
+    """Test validation rejects negative values"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 6):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.num_images_var.set("-5")
+    is_valid, result = app.validate_num_images_input()
+    assert is_valid is False
+    assert "between 1 and" in result.lower()
+
+
+def test_validate_num_images_exceeds_available(tmp_path, monkeypatch, tk_root):
+    """Test validation rejects value exceeding available images"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 6):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.num_images_var.set("10")
+    is_valid, result = app.validate_num_images_input()
+    assert is_valid is False
+    assert "cannot select 10 images" in result.lower()
+    assert "only 5" in result.lower()
+
+
+def test_load_images_updates_max_label(tmp_path, monkeypatch, tk_root):
+    """Test that loading images updates the max images label"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 11):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    assert app.total_available_images == 10
+    assert app.max_images_label.cget("text") == "(Max: 10)"
+
+
+def test_load_images_with_configured_count_sequential(tmp_path, monkeypatch, tk_root):
+    """Test loading with configured count selects first N images when not randomized"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 11):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.num_images_to_practice = 5
+    app.randomize_enabled = False
+    app.load_images()
+    
+    assert len(app.images) == 5
+    # Should be first 5 images
+    assert all(f"image_{i}.jpg" in app.images[i-1] for i in range(1, 6))
+
+
+def test_load_images_with_configured_count_randomized(tmp_path, monkeypatch, tk_root):
+    """Test loading with configured count and randomization enabled"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 11):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.num_images_to_practice = 5
+    app.randomize_enabled = True
+    app.load_images()
+    
+    assert len(app.images) == 5
+    # Should have exactly 5 images (can't test order due to randomness)
+    assert app.total_available_images == 10
+
+
+def test_load_images_none_loads_all(tmp_path, monkeypatch, tk_root):
+    """Test that None for num_images_to_practice loads all images"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 11):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.num_images_to_practice = None
+    app.load_images()
+    
+    assert len(app.images) == 10
+    assert app.total_available_images == 10
+
+
+def test_settings_persistence_num_images(tmp_path, monkeypatch, tk_root):
+    """Test that num_images_to_practice persists in settings"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.num_images_to_practice = 15
+    app.save_settings()
+    
+    # Check settings file
+    assert os.path.exists("tatssb_settings.json")
+    with open("tatssb_settings.json", 'r') as f:
+        settings = json.load(f)
+    assert settings['num_images_to_practice'] == 15
+
+
+def test_settings_load_num_images(tmp_path, monkeypatch, tk_root):
+    """Test that num_images_to_practice loads from settings"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    
+    # Create settings file
+    settings = {
+        'randomize_enabled': False,
+        'display_time': 240,
+        'preparation_time': 30,
+        'num_images_to_practice': 20
+    }
+    with open(tmp_path / "tatssb_settings.json", 'w') as f:
+        json.dump(settings, f)
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    assert app.num_images_to_practice == 20
+    assert app.num_images_var.get() == "20"
+
+
+def test_image_counter_shows_limited_format(tmp_path, monkeypatch, tk_root):
+    """Test image counter shows different format when images are limited"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 11):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.num_images_to_practice = 5
+    app.load_images()
+    app.current_image_index = 0
+    app.update_image_counter()
+    
+    counter_text = app.image_counter_label.cget("text")
+    assert "1/5" in counter_text
+    assert "10 total" in counter_text
+
+
+def test_image_counter_normal_format_all_images(tmp_path, monkeypatch, tk_root):
+    """Test image counter shows normal format when using all images"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 6):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.num_images_to_practice = None
+    app.load_images()
+    app.current_image_index = 0
+    app.update_image_counter()
+    
+    counter_text = app.image_counter_label.cget("text")
+    assert counter_text == "Image: 1/5"
+
+
+def test_start_slideshow_validates_num_images(tmp_path, monkeypatch, tk_root):
+    """Test that start_slideshow validates num_images input"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 6):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.num_images_var.set("10")  # Exceeds available
+    
+    with mock.patch("tkinter.messagebox.showerror") as mock_error:
+        app.start_slideshow()
+        mock_error.assert_called_once()
+        args = mock_error.call_args[0]
+        assert "invalid image count" in args[0].lower()
+
+
+def test_start_slideshow_reloads_images_if_changed(tmp_path, monkeypatch, tk_root):
+    """Test that start_slideshow reloads images if num_images changed"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 11):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    # Initially all images
+    assert len(app.images) == 10
+    
+    # Change to 5 images
+    app.num_images_var.set("5")
+    
+    with mock.patch("tkinter.messagebox.showinfo"):
+        app.root.after = lambda delay, func=None, *a, **k: (func() if func else None)
+        app.start_slideshow()
+    
+    # Should have reloaded with 5 images
+    assert len(app.images) == 5
+    assert app.num_images_to_practice == 5
+    
+    app.stop_slideshow()
+
+
+def test_completion_message_shows_limited_info(tmp_path, monkeypatch, tk_root):
+    """Test completion message shows correct info when images are limited"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 11):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.num_images_to_practice = 5
+    app.load_images()
+    
+    with mock.patch("tkinter.messagebox.showinfo") as mock_info:
+        app.slideshow_finished()
+        args = mock_info.call_args[0]
+        message = args[1]
+        assert "5 of 10 available" in message.lower()
+
+
+def test_completion_message_shows_all_info(tmp_path, monkeypatch, tk_root):
+    """Test completion message shows correct info when using all images"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 6):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.num_images_to_practice = None
+    app.load_images()
+    
+    with mock.patch("tkinter.messagebox.showinfo") as mock_info:
+        app.slideshow_finished()
+        args = mock_info.call_args[0]
+        message = args[1]
+        assert "all 5 images" in message.lower()
+
+
+def test_image_manager_updates_max_value_on_add(tmp_path, monkeypatch, tk_root):
+    """Test that adding images via ImageManager updates max value"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 6):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    assert app.total_available_images == 5
+    assert app.max_images_label.cget("text") == "(Max: 5)"
+    
+    # Simulate adding more images
+    for i in range(6, 9):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    # Reload images (as ImageManager would do)
+    app.load_images()
+    
+    assert app.total_available_images == 8
+    assert app.max_images_label.cget("text") == "(Max: 8)"
+
+
+def test_image_manager_updates_max_value_on_delete(tmp_path, monkeypatch, tk_root):
+    """Test that deleting images via ImageManager updates max value"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 11):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    assert app.total_available_images == 10
+    
+    # Simulate deleting images
+    os.remove(tmp_path / "images" / "image_9.jpg")
+    os.remove(tmp_path / "images" / "image_10.jpg")
+    
+    # Reload images (as ImageManager would do)
+    app.load_images()
+    
+    assert app.total_available_images == 8
+    assert app.max_images_label.cget("text") == "(Max: 8)"
