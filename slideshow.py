@@ -295,7 +295,7 @@ class TATSlideshowApp:
         current = self.current_image_index + 1 if self.images else 0
         
         # Show different format if images are limited vs all images
-        if self.num_images_to_practice and self.num_images_to_practice < self.total_available_images:
+        if self.num_images_to_practice is not None and self.num_images_to_practice < self.total_available_images:
             self.image_counter_label.config(text=f"Image: {current}/{total} (of {self.total_available_images} total)")
         else:
             self.image_counter_label.config(text=f"Image: {current}/{total}")
@@ -328,14 +328,16 @@ class TATSlideshowApp:
         
         # Show confirmation message
         randomize_text = " (randomized)" if self.randomize_enabled else ""
-        if self.num_images_to_practice:
+        if self.num_images_to_practice is not None:
             confirmation = f"Starting test with {len(self.images)} images{randomize_text}"
         else:
             confirmation = f"Starting test with all {len(self.images)} images{randomize_text}"
         self.phase_label.config(text=confirmation)
         self.root.update()
-        time.sleep(0.5)  # Brief pause to show confirmation
-            
+        self.root.after(500, self._start_slideshow_after_confirmation)  # Brief pause to show confirmation
+    
+    def _start_slideshow_after_confirmation(self):
+        """Continue starting slideshow after confirmation message is displayed"""
         self.is_running = True
         self.is_paused = False
         self.current_image_index = 0
@@ -457,7 +459,7 @@ class TATSlideshowApp:
         self.stop_slideshow()
         
         # Show completion message with proper context
-        if self.num_images_to_practice and self.num_images_to_practice < self.total_available_images:
+        if self.num_images_to_practice is not None and self.num_images_to_practice < self.total_available_images:
             completion_msg = f"TAT practice session completed!\n\n"
             completion_msg += f"Completed {len(self.images)} of {self.total_available_images} available images.\n"
             completion_msg += f"Answered {len(self.answers)} images."
