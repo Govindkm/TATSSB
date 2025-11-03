@@ -233,3 +233,119 @@ def test_export_answers(tmp_path, monkeypatch, tk_root):
 
     content = (tmp_path / "out.txt").read_text(encoding="utf-8")
     assert "A sample answer" in content
+
+
+def test_randomization_disabled_by_default(tmp_path, monkeypatch, tk_root):
+    """Test that randomization is disabled by default"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in [1, 2, 3, 4, 5]:
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    assert app.randomize_enabled is False
+    # Images should be in order
+    assert [os.path.basename(p) for p in app.images] == [
+        "image_1.jpg", "image_2.jpg", "image_3.jpg", "image_4.jpg", "image_5.jpg"
+    ]
+
+
+def test_randomization_enabled_shuffles_images(tmp_path, monkeypatch, tk_root):
+    """Test that enabling randomization shuffles the images"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 21):  # Create 20 images for higher chance of shuffle
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    # Enable randomization and reload
+    app.randomize_enabled = True
+    app.load_images()
+    
+    # Check that original order is preserved
+    expected_order = [f"image_{i}.jpg" for i in range(1, 21)]
+    assert [os.path.basename(p) for p in app.original_images] == expected_order
+    
+    # Images should be different from original (with high probability)
+    actual_order = [os.path.basename(p) for p in app.images]
+    # With 20 images, the probability of same order after shuffle is astronomically low
+    assert actual_order != expected_order
+
+
+def test_randomization_ensures_all_images_shown_once(tmp_path, monkeypatch, tk_root):
+    """Test that randomization includes each image exactly once"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    for i in range(1, 11):
+        (tmp_path / "images" / f"image_{i}.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    app.randomize_enabled = True
+    app.load_images()
+    
+    # All images should be present
+    original_set = set([os.path.basename(p) for p in app.original_images])
+    shuffled_set = set([os.path.basename(p) for p in app.images])
+    assert original_set == shuffled_set
+    assert len(app.images) == len(app.original_images)
+
+
+def test_settings_persistence(tmp_path, monkeypatch, tk_root):
+    """Test that settings are saved and loaded correctly"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    (tmp_path / "images" / "image_1.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    # Modify settings
+    app.randomize_enabled = True
+    app.display_time = 120
+    app.preparation_time = 15
+    app.save_settings()
+    
+    # Create new app instance (simulating restart)
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app2 = _make_app(tk_root)
+    
+    # Settings should be loaded
+    assert app2.randomize_enabled is True
+    assert app2.display_time == 120
+    assert app2.preparation_time == 15
+
+
+def test_toggle_randomize_updates_setting(tmp_path, monkeypatch, tk_root):
+    """Test that toggle_randomize updates the setting and shows message"""
+    monkeypatch.chdir(tmp_path)
+    os.makedirs("images", exist_ok=True)
+    (tmp_path / "images" / "image_1.jpg").write_bytes(b"\x00")
+    
+    with mock.patch("tkinter.messagebox.showwarning"):
+        app = _make_app(tk_root)
+    
+    assert app.randomize_enabled is False
+    
+    # Toggle on
+    with mock.patch("tkinter.messagebox.showinfo") as info:
+        app.randomize_var.set(True)
+        app.toggle_randomize()
+        info.assert_called()
+        assert "randomized" in info.call_args[0][1].lower()
+    
+    assert app.randomize_enabled is True
+    
+    # Toggle off
+    with mock.patch("tkinter.messagebox.showinfo") as info:
+        app.randomize_var.set(False)
+        app.toggle_randomize()
+        info.assert_called()
+        assert "sequential" in info.call_args[0][1].lower()
+    
+    assert app.randomize_enabled is False

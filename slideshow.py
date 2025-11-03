@@ -5,6 +5,9 @@ import os
 import glob
 import threading
 import time
+import random
+import json
+import shutil
 
 class TATSlideshowApp:
     def __init__(self, root):
@@ -15,15 +18,19 @@ class TATSlideshowApp:
         
         # Variables
         self.images = []
+        self.original_images = []  # Keep track of original order
         self.current_image_index = 0
         self.timer_seconds = 0
         self.is_running = False
         self.is_paused = False
-        self.display_time = 30  # Default 30 seconds per image
+        self.display_time = 240  # Default 30 seconds per image
         self.preparation_time = 30  # Default 30 seconds preparation
         self.timer_thread = None
         self.current_phase = "preparation"  # "preparation" or "writing"
+        self.randomize_enabled = False  # Randomization toggle
+        self.settings_file = "tatssb_settings.json"
         
+        self.load_settings()
         self.setup_ui()
         self.load_images()
         
@@ -76,19 +83,31 @@ class TATSlideshowApp:
                                  padx=15, pady=5, state=tk.DISABLED)
         self.next_btn.pack(side=tk.LEFT, padx=5)
         
+        self.manage_btn = tk.Button(button_frame, text="Manage Images", command=self.open_image_manager,
+                                    bg='#9b59b6', fg='white', font=('Arial', 12),
+                                    padx=15, pady=5)
+        self.manage_btn.pack(side=tk.LEFT, padx=5)
+        
         # Settings frame
         settings_frame = tk.Frame(control_frame, bg='#e8e8e8')
         settings_frame.pack(side=tk.LEFT, padx=20)
         
         tk.Label(settings_frame, text="Display Time (sec):", bg='#e8e8e8', font=('Arial', 10)).pack()
-        self.display_time_var = tk.StringVar(value="30")
+        self.display_time_var = tk.StringVar(value=self.display_time)
         display_time_entry = tk.Entry(settings_frame, textvariable=self.display_time_var, width=5)
         display_time_entry.pack()
         
         tk.Label(settings_frame, text="Prep Time (sec):", bg='#e8e8e8', font=('Arial', 10)).pack()
-        self.prep_time_var = tk.StringVar(value="30")
+        self.prep_time_var = tk.StringVar(value=self.preparation_time)
         prep_time_entry = tk.Entry(settings_frame, textvariable=self.prep_time_var, width=5)
         prep_time_entry.pack()
+        
+        # Randomization toggle
+        self.randomize_var = tk.BooleanVar(value=self.randomize_enabled)
+        randomize_check = tk.Checkbutton(settings_frame, text="Randomize Images", 
+                                        variable=self.randomize_var, bg='#e8e8e8',
+                                        font=('Arial', 10), command=self.toggle_randomize)
+        randomize_check.pack(pady=(5, 0))
         
         # Content area
         content_frame = tk.Frame(main_frame, bg='#f0f0f0')
@@ -183,11 +202,20 @@ class TATSlideshowApp:
                 return 0
                 
         image_files.sort(key=extract_number)
-        self.images = image_files
+        self.original_images = image_files.copy()  # Keep original order
+        
+        # Apply randomization if enabled
+        if self.randomize_enabled:
+            self.images = image_files.copy()
+            random.shuffle(self.images)
+        else:
+            self.images = image_files
+            
         self.update_image_counter()
         
         if self.images:
-            self.image_label.config(text=f"Loaded {len(self.images)} images\nReady to start TAT practice")
+            randomize_status = " (Randomized)" if self.randomize_enabled else ""
+            self.image_label.config(text=f"Loaded {len(self.images)} images{randomize_status}\nReady to start TAT practice")
             
     def update_image_counter(self):
         """Update the image counter display"""
@@ -394,6 +422,323 @@ class TATSlideshowApp:
                 messagebox.showinfo("Exported", f"Answers exported to {filename}")
             except Exception as e:
                 messagebox.showerror("Error", f"Could not export answers: {e}")
+    
+    def load_settings(self):
+        """Load settings from JSON file"""
+        if os.path.exists(self.settings_file):
+            try:
+                with open(self.settings_file, 'r') as f:
+                    settings = json.load(f)
+                    self.randomize_enabled = settings.get('randomize_enabled', False)
+                    self.display_time = settings.get('display_time', 240)
+                    self.preparation_time = settings.get('preparation_time', 30)
+            except Exception as e:
+                print(f"Error loading settings: {e}")
+    
+    def save_settings(self):
+        """Save settings to JSON file"""
+        try:
+            settings = {
+                'randomize_enabled': self.randomize_enabled,
+                'display_time': self.display_time,
+                'preparation_time': self.preparation_time
+            }
+            with open(self.settings_file, 'w') as f:
+                json.dump(settings, f, indent=2)
+        except Exception as e:
+            print(f"Error saving settings: {e}")
+    
+    def toggle_randomize(self):
+        """Toggle randomization setting"""
+        self.randomize_enabled = self.randomize_var.get()
+        self.save_settings()
+        if self.randomize_enabled:
+            messagebox.showinfo("Randomization", "Images will be randomized in the next session.")
+        else:
+            messagebox.showinfo("Randomization", "Images will be shown in sequential order.")
+    
+    def open_image_manager(self):
+        """Open the image management window"""
+        ImageManagerWindow(self.root, self)
+
+class ImageManagerWindow:
+    """Window for managing images in the application"""
+    
+    def __init__(self, parent, app):
+        self.parent = parent
+        self.app = app
+        self.window = tk.Toplevel(parent)
+        self.window.title("Image Manager - TATSSB")
+        self.window.geometry("900x700")
+        self.window.configure(bg='#f0f0f0')
+        
+        self.image_folder = "images"
+        self.selected_image = None
+        self.preview_photo = None
+        
+        self.setup_ui()
+        self.refresh_image_list()
+    
+    def setup_ui(self):
+        """Setup the image manager UI"""
+        # Title
+        title_label = tk.Label(self.window, text="Image Management", 
+                              font=('Arial', 16, 'bold'), bg='#34495e', fg='white', pady=10)
+        title_label.pack(fill=tk.X)
+        
+        # Main content frame
+        content_frame = tk.Frame(self.window, bg='#f0f0f0')
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Left panel - Image list
+        left_frame = tk.Frame(content_frame, bg='#ecf0f1', relief=tk.RAISED, bd=2)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        
+        list_header = tk.Label(left_frame, text="Current Images", 
+                              font=('Arial', 12, 'bold'), bg='#34495e', fg='white', pady=5)
+        list_header.pack(fill=tk.X)
+        
+        # Scrollable listbox
+        list_scroll_frame = tk.Frame(left_frame, bg='#ecf0f1')
+        list_scroll_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        scrollbar = tk.Scrollbar(list_scroll_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.image_listbox = tk.Listbox(list_scroll_frame, yscrollcommand=scrollbar.set,
+                                       font=('Arial', 10), selectmode=tk.SINGLE)
+        self.image_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.image_listbox.bind('<<ListboxSelect>>', self.on_image_select)
+        scrollbar.config(command=self.image_listbox.yview)
+        
+        # Control buttons for list
+        list_button_frame = tk.Frame(left_frame, bg='#ecf0f1')
+        list_button_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        self.delete_btn = tk.Button(list_button_frame, text="Delete Selected", 
+                                    command=self.delete_image, bg='#e74c3c', fg='white',
+                                    font=('Arial', 10), state=tk.DISABLED)
+        self.delete_btn.pack(side=tk.LEFT, padx=2)
+        
+        refresh_btn = tk.Button(list_button_frame, text="Refresh List", 
+                               command=self.refresh_image_list, bg='#3498db', fg='white',
+                               font=('Arial', 10))
+        refresh_btn.pack(side=tk.LEFT, padx=2)
+        
+        # Right panel - Preview and actions
+        right_frame = tk.Frame(content_frame, bg='#ecf0f1', relief=tk.RAISED, bd=2)
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        
+        preview_header = tk.Label(right_frame, text="Image Preview", 
+                                 font=('Arial', 12, 'bold'), bg='#34495e', fg='white', pady=5)
+        preview_header.pack(fill=tk.X)
+        
+        # Preview area
+        self.preview_frame = tk.Frame(right_frame, bg='white', relief=tk.SUNKEN, bd=2)
+        self.preview_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        self.preview_label = tk.Label(self.preview_frame, text="Select an image to preview", 
+                                     font=('Arial', 12), bg='white', fg='#7f8c8d')
+        self.preview_label.pack(expand=True)
+        
+        # Image info
+        self.info_label = tk.Label(right_frame, text="", font=('Arial', 9), 
+                                  bg='#ecf0f1', fg='#2c3e50', justify=tk.LEFT)
+        self.info_label.pack(fill=tk.X, padx=5)
+        
+        # Action buttons
+        action_frame = tk.Frame(right_frame, bg='#ecf0f1')
+        action_frame.pack(fill=tk.X, padx=5, pady=10)
+        
+        add_btn = tk.Button(action_frame, text="Add New Images", 
+                           command=self.add_images, bg='#27ae60', fg='white',
+                           font=('Arial', 11, 'bold'), pady=5)
+        add_btn.pack(fill=tk.X, pady=2)
+        
+        # Validation info
+        info_text = ("Supported formats: JPG, PNG\n"
+                    "Naming convention: image_N.jpg or image_N.png\n"
+                    "where N is a number")
+        info_display = tk.Label(right_frame, text=info_text, font=('Arial', 9), 
+                               bg='#ecf0f1', fg='#7f8c8d', justify=tk.LEFT)
+        info_display.pack(padx=5, pady=5)
+        
+        # Bottom button frame
+        bottom_frame = tk.Frame(self.window, bg='#f0f0f0')
+        bottom_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        
+        close_btn = tk.Button(bottom_frame, text="Close", command=self.close_window,
+                             bg='#95a5a6', fg='white', font=('Arial', 11), padx=20)
+        close_btn.pack(side=tk.RIGHT)
+    
+    def refresh_image_list(self):
+        """Refresh the list of images"""
+        self.image_listbox.delete(0, tk.END)
+        
+        if not os.path.exists(self.image_folder):
+            os.makedirs(self.image_folder)
+            return
+        
+        # Get all image files
+        image_files = glob.glob(os.path.join(self.image_folder, "image_*.jpg"))
+        image_files.extend(glob.glob(os.path.join(self.image_folder, "image_*.png")))
+        
+        # Sort by number
+        def extract_number(filename):
+            try:
+                return int(os.path.basename(filename).split('image_')[1].split('.')[0])
+            except:
+                return 0
+        
+        image_files.sort(key=extract_number)
+        
+        for img_file in image_files:
+            self.image_listbox.insert(tk.END, os.path.basename(img_file))
+    
+    def on_image_select(self, event):
+        """Handle image selection"""
+        selection = self.image_listbox.curselection()
+        if not selection:
+            self.delete_btn.config(state=tk.DISABLED)
+            return
+        
+        self.delete_btn.config(state=tk.NORMAL)
+        index = selection[0]
+        filename = self.image_listbox.get(index)
+        self.selected_image = os.path.join(self.image_folder, filename)
+        
+        # Show preview
+        self.show_preview(self.selected_image)
+    
+    def show_preview(self, image_path):
+        """Display image preview"""
+        try:
+            # Load image
+            pil_image = Image.open(image_path)
+            
+            # Get image info
+            width, height = pil_image.size
+            file_size = os.path.getsize(image_path)
+            size_kb = file_size / 1024
+            
+            info_text = f"Filename: {os.path.basename(image_path)}\n"
+            info_text += f"Dimensions: {width} x {height} pixels\n"
+            info_text += f"Size: {size_kb:.1f} KB"
+            self.info_label.config(text=info_text)
+            
+            # Resize for preview
+            preview_width = 400
+            preview_height = 400
+            ratio = min(preview_width/width, preview_height/height)
+            new_width = int(width * ratio)
+            new_height = int(height * ratio)
+            
+            pil_image = pil_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            self.preview_photo = ImageTk.PhotoImage(pil_image)
+            
+            self.preview_label.config(image=self.preview_photo, text="")
+            
+        except Exception as e:
+            self.preview_label.config(image="", text=f"Error loading preview:\n{str(e)}")
+            self.info_label.config(text="")
+    
+    def add_images(self):
+        """Add new images to the collection"""
+        filenames = filedialog.askopenfilenames(
+            title="Select Images to Add",
+            filetypes=[("Image files", "*.jpg *.jpeg *.png"), ("All files", "*.*")]
+        )
+        
+        if not filenames:
+            return
+        
+        # Get next available number
+        existing_images = glob.glob(os.path.join(self.image_folder, "image_*.jpg"))
+        existing_images.extend(glob.glob(os.path.join(self.image_folder, "image_*.png")))
+        
+        max_num = 0
+        for img in existing_images:
+            try:
+                num = int(os.path.basename(img).split('image_')[1].split('.')[0])
+                max_num = max(max_num, num)
+            except:
+                pass
+        
+        next_num = max_num + 1
+        added_count = 0
+        errors = []
+        
+        for filename in filenames:
+            try:
+                # Validate file is an image
+                Image.open(filename).verify()
+                
+                # Get file extension
+                ext = os.path.splitext(filename)[1].lower()
+                if ext not in ['.jpg', '.jpeg', '.png']:
+                    errors.append(f"{os.path.basename(filename)}: Unsupported format")
+                    continue
+                
+                # Normalize extension to .jpg or .png
+                if ext == '.jpeg':
+                    ext = '.jpg'
+                
+                # Copy to images folder with proper naming
+                dest_filename = f"image_{next_num}{ext}"
+                dest_path = os.path.join(self.image_folder, dest_filename)
+                
+                shutil.copy2(filename, dest_path)
+                added_count += 1
+                next_num += 1
+                
+            except Exception as e:
+                errors.append(f"{os.path.basename(filename)}: {str(e)}")
+        
+        # Show results
+        message = f"Successfully added {added_count} image(s)."
+        if errors:
+            message += f"\n\nErrors:\n" + "\n".join(errors[:5])
+            if len(errors) > 5:
+                message += f"\n... and {len(errors) - 5} more errors"
+        
+        if added_count > 0:
+            messagebox.showinfo("Images Added", message)
+            self.refresh_image_list()
+            # Reload images in main app
+            self.app.load_images()
+        else:
+            messagebox.showerror("No Images Added", message)
+    
+    def delete_image(self):
+        """Delete selected image"""
+        if not self.selected_image or not os.path.exists(self.selected_image):
+            return
+        
+        filename = os.path.basename(self.selected_image)
+        result = messagebox.askyesno("Confirm Delete", 
+                                     f"Are you sure you want to delete '{filename}'?\n\nThis action cannot be undone.")
+        
+        if result:
+            try:
+                os.remove(self.selected_image)
+                messagebox.showinfo("Deleted", f"'{filename}' has been deleted.")
+                self.refresh_image_list()
+                self.preview_label.config(image="", text="Select an image to preview")
+                self.info_label.config(text="")
+                self.preview_photo = None
+                self.selected_image = None
+                self.delete_btn.config(state=tk.DISABLED)
+                
+                # Reload images in main app
+                self.app.load_images()
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not delete image: {e}")
+    
+    def close_window(self):
+        """Close the image manager window"""
+        self.window.destroy()
+
 
 def main():
     root = tk.Tk()
